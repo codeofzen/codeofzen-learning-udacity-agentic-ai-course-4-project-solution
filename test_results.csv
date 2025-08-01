@@ -1,0 +1,13 @@
+request_id,request_date,cash_balance,inventory_value,response
+1,2025-04-01,45059.7,4940.299999999999,"65.0, Thank you for considering us for your paper supply needs for the ceremony on April 15, 2025. Here is the quote for your requested items:
+
+- 200 sheets of A4 Glossy Paper at $0.20 per sheet
+- 100 sheets of Heavy Cardstock (white) at $0.15 per sheet
+- 100 sheets of Colored Paper (assorted colors) at $0.10 per sheet
+
+We are pleased to provide you with quality paper supplies at competitive prices. We value your business and are here to assist you with timely delivery and exceptional customer service.
+
+Total Amount: $65.00
+Discounted Amount: $65.00
+
+Please let us know if there is anything else we can assist you with. We look forward to serving you., {""job_type"": ""event manager"", ""order_size"": ""large"", ""event_type"": ""meeting""}"

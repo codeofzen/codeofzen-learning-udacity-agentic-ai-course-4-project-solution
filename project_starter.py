@@ -1,22 +1,37 @@
+from contextlib import contextmanager
+from dataclasses import dataclass
+import json
+from queue import Empty, Queue
+import uuid
 import pandas as pd
 import numpy as np
 import os
 import time
 import dotenv
 import ast
-from sqlalchemy.sql import text
 from datetime import datetime, timedelta
-from typing import Dict, List, Union
+
+from sqlalchemy.sql import text
+from typing import Dict, List, Optional, Union
 from sqlalchemy import create_engine, Engine
+from pydantic import BaseModel, Field
+
+from pydantic_ai import Agent, Tool
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from enum import Enum
+import functools
+
 
 # Create an SQLite database
 db_engine = create_engine("sqlite:///munder_difflin.db")
 
+# fmt: off
 # List containing the different kinds of papers 
 paper_supplies = [
     # Paper Types (priced per sheet unless specified)
     {"item_name": "A4 paper",                         "category": "paper",        "unit_price": 0.05},
-    {"item_name": "Letter-sized paper",              "category": "paper",        "unit_price": 0.06},
+    {"item_name": "Letter-sized paper",               "category": "paper",        "unit_price": 0.06},
     {"item_name": "Cardstock",                        "category": "paper",        "unit_price": 0.15},
     {"item_name": "Colored paper",                    "category": "paper",        "unit_price": 0.10},
     {"item_name": "Glossy paper",                     "category": "paper",        "unit_price": 0.20},
@@ -68,10 +83,14 @@ paper_supplies = [
     {"item_name": "250 gsm cardstock",                "category": "specialty",    "unit_price": 0.30},
     {"item_name": "220 gsm poster paper",             "category": "specialty",    "unit_price": 0.35},
 ]
+# fmt: on
 
 # Given below are some utility functions you can use to implement your multi-agent system
 
-def generate_sample_inventory(paper_supplies: list, coverage: float = 0.4, seed: int = 137) -> pd.DataFrame:
+
+def generate_sample_inventory(
+    paper_supplies: list, coverage: float = 0.4, seed: int = 137
+) -> pd.DataFrame:
     """
     Generate inventory for exactly a specified percentage of items from the full paper supply list.
 
@@ -104,9 +123,7 @@ def generate_sample_inventory(paper_supplies: list, coverage: float = 0.4, seed:
 
     # Randomly select item indices without replacement
     selected_indices = np.random.choice(
-        range(len(paper_supplies)),
-        size=num_items,
-        replace=False
+        range(len(paper_supplies)), size=num_items, replace=False
     )
 
     # Extract selected items from paper_supplies list
@@ -115,18 +132,23 @@ def generate_sample_inventory(paper_supplies: list, coverage: float = 0.4, seed:
     # Construct inventory records
     inventory = []
     for item in selected_items:
-        inventory.append({
-            "item_name": item["item_name"],
-            "category": item["category"],
-            "unit_price": item["unit_price"],
-            "current_stock": np.random.randint(200, 800),  # Realistic stock range
-            "min_stock_level": np.random.randint(50, 150)  # Reasonable threshold for reordering
-        })
+        inventory.append(
+            {
+                "item_name": item["item_name"],
+                "category": item["category"],
+                "unit_price": item["unit_price"],
+                "current_stock": np.random.randint(200, 800),  # Realistic stock range
+                "min_stock_level": np.random.randint(
+                    50, 150
+                ),  # Reasonable threshold for reordering
+            }
+        )
 
     # Return inventory as a pandas DataFrame
     return pd.DataFrame(inventory)
 
-def init_database(db_engine: Engine, seed: int = 137) -> Engine:    
+
+def init_database(db_engine: Engine, seed: int = 137) -> Engine:
     """
     Set up the Munder Difflin database with all required tables and initial records.
 
@@ -152,15 +174,19 @@ def init_database(db_engine: Engine, seed: int = 137) -> Engine:
         # ----------------------------
         # 1. Create an empty 'transactions' table schema
         # ----------------------------
-        transactions_schema = pd.DataFrame({
-            "id": [],
-            "item_name": [],
-            "transaction_type": [],  # 'stock_orders' or 'sales'
-            "units": [],             # Quantity involved
-            "price": [],             # Total price for the transaction
-            "transaction_date": [],  # ISO-formatted date
-        })
-        transactions_schema.to_sql("transactions", db_engine, if_exists="replace", index=False)
+        transactions_schema = pd.DataFrame(
+            {
+                "id": [],
+                "item_name": [],
+                "transaction_type": [],  # 'stock_orders' or 'sales'
+                "units": [],  # Quantity involved
+                "price": [],  # Total price for the transaction
+                "transaction_date": [],  # ISO-formatted date
+            }
+        )
+        transactions_schema.to_sql(
+            "transactions", db_engine, if_exists="replace", index=False
+        )
 
         # Set a consistent starting date
         initial_date = datetime(2025, 1, 1).isoformat()
@@ -170,7 +196,9 @@ def init_database(db_engine: Engine, seed: int = 137) -> Engine:
         # ----------------------------
         quote_requests_df = pd.read_csv("quote_requests.csv")
         quote_requests_df["id"] = range(1, len(quote_requests_df) + 1)
-        quote_requests_df.to_sql("quote_requests", db_engine, if_exists="replace", index=False)
+        quote_requests_df.to_sql(
+            "quote_requests", db_engine, if_exists="replace", index=False
+        )
 
         # ----------------------------
         # 3. Load and transform 'quotes' table
@@ -184,20 +212,28 @@ def init_database(db_engine: Engine, seed: int = 137) -> Engine:
             quotes_df["request_metadata"] = quotes_df["request_metadata"].apply(
                 lambda x: ast.literal_eval(x) if isinstance(x, str) else x
             )
-            quotes_df["job_type"] = quotes_df["request_metadata"].apply(lambda x: x.get("job_type", ""))
-            quotes_df["order_size"] = quotes_df["request_metadata"].apply(lambda x: x.get("order_size", ""))
-            quotes_df["event_type"] = quotes_df["request_metadata"].apply(lambda x: x.get("event_type", ""))
+            quotes_df["job_type"] = quotes_df["request_metadata"].apply(
+                lambda x: x.get("job_type", "")
+            )
+            quotes_df["order_size"] = quotes_df["request_metadata"].apply(
+                lambda x: x.get("order_size", "")
+            )
+            quotes_df["event_type"] = quotes_df["request_metadata"].apply(
+                lambda x: x.get("event_type", "")
+            )
 
         # Retain only relevant columns
-        quotes_df = quotes_df[[
-            "request_id",
-            "total_amount",
-            "quote_explanation",
-            "order_date",
-            "job_type",
-            "order_size",
-            "event_type"
-        ]]
+        quotes_df = quotes_df[
+            [
+                "request_id",
+                "total_amount",
+                "quote_explanation",
+                "order_date",
+                "job_type",
+                "order_size",
+                "event_type",
+            ]
+        ]
         quotes_df.to_sql("quotes", db_engine, if_exists="replace", index=False)
 
         # ----------------------------
@@ -209,26 +245,32 @@ def init_database(db_engine: Engine, seed: int = 137) -> Engine:
         initial_transactions = []
 
         # Add a starting cash balance via a dummy sales transaction
-        initial_transactions.append({
-            "item_name": None,
-            "transaction_type": "sales",
-            "units": None,
-            "price": 50000.0,
-            "transaction_date": initial_date,
-        })
+        initial_transactions.append(
+            {
+                "item_name": None,
+                "transaction_type": "sales",
+                "units": None,
+                "price": 50000.0,
+                "transaction_date": initial_date,
+            }
+        )
 
         # Add one stock order transaction per inventory item
         for _, item in inventory_df.iterrows():
-            initial_transactions.append({
-                "item_name": item["item_name"],
-                "transaction_type": "stock_orders",
-                "units": item["current_stock"],
-                "price": item["current_stock"] * item["unit_price"],
-                "transaction_date": initial_date,
-            })
+            initial_transactions.append(
+                {
+                    "item_name": item["item_name"],
+                    "transaction_type": "stock_orders",
+                    "units": item["current_stock"],
+                    "price": item["current_stock"] * item["unit_price"],
+                    "transaction_date": initial_date,
+                }
+            )
 
         # Commit transactions to database
-        pd.DataFrame(initial_transactions).to_sql("transactions", db_engine, if_exists="append", index=False)
+        pd.DataFrame(initial_transactions).to_sql(
+            "transactions", db_engine, if_exists="append", index=False
+        )
 
         # Save the inventory reference table
         inventory_df.to_sql("inventory", db_engine, if_exists="replace", index=False)
@@ -236,8 +278,9 @@ def init_database(db_engine: Engine, seed: int = 137) -> Engine:
         return db_engine
 
     except Exception as e:
-        print(f"Error initializing database: {e}")
+        log(f"Error initializing database: {e}", LogLevel.ERROR)
         raise
+
 
 def create_transaction(
     item_name: str,
@@ -272,14 +315,23 @@ def create_transaction(
         if transaction_type not in {"stock_orders", "sales"}:
             raise ValueError("Transaction type must be 'stock_orders' or 'sales'")
 
+        log(
+            f"[INFO] Creating transaction: {item_name}, {transaction_type}, {quantity}, {price}, {date_str}",
+            LogLevel.INFO,
+        )
+
         # Prepare transaction record as a single-row DataFrame
-        transaction = pd.DataFrame([{
-            "item_name": item_name,
-            "transaction_type": transaction_type,
-            "units": quantity,
-            "price": price,
-            "transaction_date": date_str,
-        }])
+        transaction = pd.DataFrame(
+            [
+                {
+                    "item_name": item_name,
+                    "transaction_type": transaction_type,
+                    "units": quantity,
+                    "price": price,
+                    "transaction_date": date_str,
+                }
+            ]
+        )
 
         # Insert the record into the database
         transaction.to_sql("transactions", db_engine, if_exists="append", index=False)
@@ -289,14 +341,15 @@ def create_transaction(
         return int(result.iloc[0]["id"])
 
     except Exception as e:
-        print(f"Error creating transaction: {e}")
+        log(f"Error creating transaction: {e}", LogLevel.ERROR)
         raise
+
 
 def get_all_inventory(as_of_date: str) -> Dict[str, int]:
     """
     Retrieve a snapshot of available inventory as of a specific date.
 
-    This function calculates the net quantity of each item by summing 
+    This function calculates the net quantity of each item by summing
     all stock orders and subtracting all sales up to and including the given date.
 
     Only items with positive stock are included in the result.
@@ -329,11 +382,12 @@ def get_all_inventory(as_of_date: str) -> Dict[str, int]:
     # Convert the result into a dictionary {item_name: stock}
     return dict(zip(result["item_name"], result["stock"]))
 
+
 def get_stock_level(item_name: str, as_of_date: Union[str, datetime]) -> pd.DataFrame:
     """
     Retrieve the stock level of a specific item as of a given date.
 
-    This function calculates the net stock by summing all 'stock_orders' and 
+    This function calculates the net stock by summing all 'stock_orders' and
     subtracting all 'sales' transactions for the specified item up to the given date.
 
     Args:
@@ -368,6 +422,7 @@ def get_stock_level(item_name: str, as_of_date: Union[str, datetime]) -> pd.Data
         params={"item_name": item_name, "as_of_date": as_of_date},
     )
 
+
 def get_supplier_delivery_date(input_date_str: str, quantity: int) -> str:
     """
     Estimate the supplier delivery date based on the requested order quantity and a starting date.
@@ -386,14 +441,20 @@ def get_supplier_delivery_date(input_date_str: str, quantity: int) -> str:
         str: Estimated delivery date in ISO format (YYYY-MM-DD).
     """
     # Debug log (comment out in production if needed)
-    print(f"FUNC (get_supplier_delivery_date): Calculating for qty {quantity} from date string '{input_date_str}'")
+    log(
+        f"FUNC (get_supplier_delivery_date): Calculating for qty {quantity} from date string '{input_date_str}'",
+        LogLevel.DEBUG,
+    )
 
     # Attempt to parse the input date
     try:
         input_date_dt = datetime.fromisoformat(input_date_str.split("T")[0])
     except (ValueError, TypeError):
         # Fallback to current date on format error
-        print(f"WARN (get_supplier_delivery_date): Invalid date format '{input_date_str}', using today as base.")
+        log(
+            f"WARN (get_supplier_delivery_date): Invalid date format '{input_date_str}', using today as base.",
+            LogLevel.WARNING,
+        )
         input_date_dt = datetime.now()
 
     # Determine delivery delay based on quantity
@@ -411,6 +472,7 @@ def get_supplier_delivery_date(input_date_str: str, quantity: int) -> str:
 
     # Return formatted delivery date
     return delivery_date_dt.strftime("%Y-%m-%d")
+
 
 def get_cash_balance(as_of_date: Union[str, datetime]) -> float:
     """
@@ -439,14 +501,18 @@ def get_cash_balance(as_of_date: Union[str, datetime]) -> float:
 
         # Compute the difference between sales and stock purchases
         if not transactions.empty:
-            total_sales = transactions.loc[transactions["transaction_type"] == "sales", "price"].sum()
-            total_purchases = transactions.loc[transactions["transaction_type"] == "stock_orders", "price"].sum()
+            total_sales = transactions.loc[
+                transactions["transaction_type"] == "sales", "price"
+            ].sum()
+            total_purchases = transactions.loc[
+                transactions["transaction_type"] == "stock_orders", "price"
+            ].sum()
             return float(total_sales - total_purchases)
 
         return 0.0
 
     except Exception as e:
-        print(f"Error getting cash balance: {e}")
+        log(f"Error getting cash balance: {e}", LogLevel.ERROR)
         return 0.0
 
 
@@ -492,12 +558,14 @@ def generate_financial_report(as_of_date: Union[str, datetime]) -> Dict:
         item_value = stock * item["unit_price"]
         inventory_value += item_value
 
-        inventory_summary.append({
-            "item_name": item["item_name"],
-            "stock": stock,
-            "unit_price": item["unit_price"],
-            "value": item_value,
-        })
+        inventory_summary.append(
+            {
+                "item_name": item["item_name"],
+                "stock": stock,
+                "unit_price": item["unit_price"],
+                "value": item_value,
+            }
+        )
 
     # Identify top-selling products by revenue
     top_sales_query = """
@@ -580,6 +648,109 @@ def search_quote_history(search_terms: List[str], limit: int = 5) -> List[Dict]:
         result = conn.execute(text(query), params)
         return [dict(row) for row in result]
 
+
+########################
+########################
+########################
+# Progress Manager for CLI Output & print utils
+########################
+########################
+########################
+
+
+class LogLevel(Enum):
+    OFF = 0
+    ERROR = 1
+    WARNING = 2
+    INFO = 3
+    DEBUG = 4
+
+
+log_level = LogLevel.DEBUG
+
+
+def log(message: str, level: LogLevel = LogLevel.INFO) -> None:
+    """
+    Log a message to the console with the specified log level.
+
+    Args:
+        message (str): The message to log.
+        level (LogLevel, optional): The log level for the message. Defaults to LogLevel.INFO.
+    """
+    if level.value <= log_level.value:
+        print(f"[{level.name}] {message}")
+
+
+class StatusContext:
+    """Helper class for manual status control"""
+
+    def __init__(self, task_name: str, start_time: float):
+        self.task_name = task_name
+        self.start_time = start_time
+
+    def fail(self, reason: str = "Operation failed"):
+        """Manually mark the task as failed"""
+        duration = time.time() - self.start_time
+        duration_str = (
+            f"{duration:.1f}s" if duration >= 1 else f"{int(duration * 1000)}ms"
+        )
+        print(f"❌ Failed: {self.task_name} ({duration_str}) - {reason}")
+
+    def complete(self, message: str = None):
+        """Manually mark the task as completed"""
+        duration = time.time() - self.start_time
+        duration_str = (
+            f"{duration:.1f}s" if duration >= 1 else f"{int(duration * 1000)}ms"
+        )
+        result_msg = f" - {message}" if message else ""
+        print(f"✅ Completed: {self.task_name} ({duration_str}){result_msg}")
+
+
+@contextmanager
+def status(task_name: str):
+    """
+    Simple context manager that prints running/completed/failed status
+
+    Usage:
+        # Auto completion (existing behavior)
+        with status("OrderAgent - process_order"):
+            your_function()
+
+        # Manual control
+        with status("OrderAgent - process_order") as s:
+            result = your_function()
+            if not result.success:
+                s.fail("Order extraction failed")
+                return
+            s.complete("Found 3 items")
+    """
+    print(f"🔄 Running: {task_name}")
+    start_time = time.time()
+    status_obj = StatusContext(task_name, start_time)
+
+    try:
+        yield status_obj
+
+        # Only auto-complete if user didn't manually call complete() or fail()
+        # We check this by seeing if the duration would be very recent
+        current_time = time.time()
+        if current_time - start_time > 0.001:  # More than 1ms has passed
+            duration = current_time - start_time
+            if duration < 1:
+                duration_str = f"{int(duration * 1000)}ms"
+            else:
+                duration_str = f"{duration:.1f}s"
+            print(f"✅ Completed: {task_name} ({duration_str})")
+
+    except Exception as e:
+        duration = time.time() - start_time
+        duration_str = (
+            f"{duration:.1f}s" if duration >= 1 else f"{int(duration * 1000)}ms"
+        )
+        print(f"❌ Failed: {task_name} ({duration_str}) - {str(e)}")
+        raise  # Re-raise the exception
+
+
 ########################
 ########################
 ########################
@@ -588,21 +759,807 @@ def search_quote_history(search_terms: List[str], limit: int = 5) -> List[Dict]:
 ########################
 ########################
 
+#
+# Entity Definitions
+#
 
-# Set up and load your env parameters and instantiate your model.
+
+class InventoryItem(BaseModel):
+    """
+    Represents an item in the inventory with its name, category, unit price,
+    current stock, and minimum stock level.
+    """
+
+    item_name: str = Field(..., description="Name of the inventory item")
+    category: str = Field(..., description="Category of the inventory item")
+    unit_price: float = Field(..., description="Price per unit of the inventory item")
+
+
+class OrderItem(BaseModel):
+    """
+    Represents an item in an order with item name, quantity, and unit price.
+    """
+
+    item_name: str = Field(..., description="Name of the item being ordered")
+    quantity: int = Field(..., description="Number of units to order")
+    unit_price: float = Field(
+        ..., description="Price per unit of the item being ordered"
+    )
+
+
+class Order(BaseModel):
+    """
+    Represents an order extracted by the Order Agent.
+    """
+
+    id: str = Field(..., description="Unique identifier for the order")
+    items: List[OrderItem] = Field(..., description="List of items in the order")
+
+
+class OrderResponse(BaseModel):
+    """
+    Represents the response from the Order Agent containing order details.
+    """
+
+    is_success: bool = Field(
+        ..., description="Indicates if the order extraction was successful"
+    )
+    order: Optional[Order] = Field(
+        None, description="Extracted order data if successful"
+    )
+    agent_error: Optional[str] = Field(
+        None, description="Error details if the extraction failed"
+    )
+
+
+class StockOrderItem(BaseModel):
+    """
+    Represents an item in a stock order with item name, quantity, and expected delivery date.
+    """
+
+    item_name: str = Field(..., description="Name of the item to be ordered")
+    quantity: int = Field(..., description="Number of units to order")
+    expected_delivery_date: str = Field(
+        ...,
+        description="Expected delivery date for the stock order in ISO format (YYYY-MM-DD)",
+    )
+
+
+class StockOrder(BaseModel):
+    """
+    Represents a stock order for inventory management.
+    """
+
+    items: List[StockOrderItem] = Field(
+        ..., description="List of items in the stock order"
+    )
+
+
+class DiscountPolicyType(str, Enum):
+    """
+    Enum representing different types of available discount policies.
+    """
+
+    NO_DISCOUNT = "No discount policy applied."
+    PERCENTAGE = "Discount the amount by a percentage value."
+    ROUND_DOWN = "Round down the amount to a specific precision. But never round down more than 10%."
+
+
+class DiscountPolicy(BaseModel):
+    """
+    Represents a discount policy for quoting.
+    """
+
+    policy: DiscountPolicyType = Field(
+        ..., description="Type of discount policy to apply"
+    )
+    policy_description: str = Field(
+        ..., description="Description of the discount policy"
+    )
+
+
+class QuoteItem(BaseModel):
+    """
+    Represents an item in a quote with item name, quantity, unit price, and total price.
+    """
+
+    item_name: str = Field(..., description="Name of the item in the quote")
+    quantity: int = Field(..., description="Number of units quoted")
+    discounted_price: float = Field(
+        ..., description="Price per unit of the item with discount applied"
+    )
+
+
+class Quote(BaseModel):
+    """
+    Represents a quote generated by the quoting agent.
+    """
+
+    order: Order = Field(..., description="Order details associated with the quote")
+    quote_items: List[QuoteItem] = Field(
+        ..., description="List of items included in the quote"
+    )
+
+    customer_quote: str = Field(
+        ..., description="The quote text provided to the customer"
+    )
+    total_amount: float = Field(..., description="Total amount of the quote")
+    discounted_amount: float = Field(..., description="Discounted amount of the quote")
+    discount_policy: Optional[DiscountPolicy] = Field(
+        None, description="Discount policy applied to the quote, if any"
+    )
+
+
+class Transaction(BaseModel):
+    """
+    Represents a transaction in the system, either a stock order or a sale.
+
+    This model is used to log transactions in the database, including stock orders
+    and sales made by the company.
+    """
+
+    item_name: str
+    transaction_type: str
+    quantity: int
+    price: float
+    date: str
+
+
+class TransactionResult(BaseModel):
+    """
+    Represents the result of a transaction operation.
+
+    This model is used to return the outcome of a transaction, including success status,
+    any resulting data, and error information if applicable.
+    """
+
+    sale_transaction_ids: List[int] = Field(
+        ..., description="List of sale transaction IDs created"
+    )
+    stock_order_transaction_ids: List[int] = Field(
+        ..., description="List of stock order transaction IDs created"
+    )
+
+
+class Response(BaseModel):
+    """
+    Response of Orchestration Agent containing the details about the order and the quote.
+
+    Use the __str__ method to get a string representation of the response to be returned to the customer.
+
+    Check the `is_success` field to determine if the operation was successful.
+    If `is_success` is False, the `agent_error` field will contain details about the error.
+    """
+
+    order: Order = Field(..., description="Data returned by the agent, if any")
+
+    quote: Quote = Field(
+        ..., description="Quote generated by the quoting agent, if applicable"
+    )
+
+    def __str__(self) -> str:
+        """
+        Returns a string representation of the OrderQuoteResponse.
+
+        This includes a comma-separated list of:
+        * total amount
+        * customer quot
+        * order details in JSON format.
+        """
+
+        order_details = {
+            "job_type": "event manager",
+            "order_size": "large",
+            "event_type": "meeting",
+        }
+
+        return f"{self.quote.discounted_amount}, {self.quote.customer_quote}, {json.dumps(order_details)}"
+
+
+#
+# Agent Definitions
+#
+
+
+class OrderAgent:
+    """
+    Order Agent responsible for extracting order details from customer requests.
+
+    """
+
+    def __init__(self, model_provider: OpenAIProvider):
+        self.agent_id = "order_agent"
+        self.agent_name = "Order Agent"
+        self.agent = Agent(
+            model=OpenAIModel("gpt-4o", provider=model_provider),
+            output_type=OrderResponse,
+            system_prompt=self._get_system_prompt(),
+            tools=[get_order_id_tool, get_items_from_inventory],
+        )
+
+    def process_quote_request(self, request_text: str) -> OrderResponse:
+        """
+        Processes a customer request to extract order details.
+
+        Args:
+            request_text (str): The text of the customer request containing order information.
+
+        Returns:
+            OrderAgentResponse: Contains the extracted order details or an error message.
+        """
+        log("Agent::process_quote_request")
+
+        order_output = None
+
+        try:
+
+            agent_response = self.agent.run_sync(request_text)
+
+            order_output = agent_response.output
+
+            if order_output.is_success:
+                log("Order extraction successful", LogLevel.INFO)
+                return order_output
+            else:
+                log(
+                    "Order extraction failed: %s",
+                    order_output.agent_error,
+                    LogLevel.ERROR,
+                )
+        except Exception as e:
+            log("Error processing quote requests", LogLevel.ERROR)
+            order_output = OrderResponse(
+                is_success=False,
+                data=None,
+                agent_error=f"Error: {str(e)}",
+            )
+
+        return order_output
+
+    @classmethod
+    def _get_system_prompt(cls) -> str:
+        """
+        Returns the system prompt for the Order Agent.
+        This prompt guides the agent's behavior and expectations.
+        """
+        # TODO: Improve system prompt
+        return """
+            You are an sales agent working in the sales department of a paper company.
+
+            Your task is to process incoming order requests from customers and extract the relevant order details from the request.  You will receive a customer request as input, which may contain various details about the order, such as item names, quantities, and any special instructions. Ensure that the items match the items available in the inventory matching their names.
+
+            Your response should include the following fields:
+            - `is_success`: A boolean indicating whether the order extraction was successful.
+            - `order`: An Order object containing the extracted order details, including:
+                - `items`: A list of OrderItem objects, each containing:
+                    - `item_name`: The name of the item being ordered.
+                    - `quantity`: The number of units to order.
+                    - `unit_price`: The price per unit of the item being ordered.
+
+            Provide quality always as units (paper sheets, etc.). This means that you need to convert any other units (e.g., reams, packs) into units.
+            - `reams`: A ream is 500 units.
+            - `pack`: A pack is 100 units.
+            - `box`: A box is 5000 units.
+            
+            If the request does not contain sufficient information to extract an order, set `is_success` to False and provide an appropriate error message in the `agent_error` field.
+            
+            Example: 
+            {
+                "is_success": False,
+                "agent_error": "The request does not contain sufficient information to extract an order."
+            }    
+            """
+
+
+class InventoryAgent:
+    """
+    Inventory Agent responsible for managing and querying inventory data.
+
+    This agent can check stock levels, reorder items, and provide inventory reports.
+    """
+
+    def __init__(self, model_provider: OpenAIProvider):
+        self.agent_id = "inventory_agent"
+        self.agent_name = "Inventory Agent"
+        # This implementation does not use an LLM-based agent for inventory management.
+        # self.agent = Agent(
+        #     model=OpenAIModel("gpt-4o", provider=model_provider),
+        #     output_type=StockOrder,
+        #     system_prompt=self._get_system_prompt(),
+        # )
+
+    def process_order(self, order: Order) -> StockOrder:
+        """
+        Checks the stock level of a specific item as of a given date.
+
+        This function processes an order by checking the stock levels of the items in the order. Since the order data is extracted by the Order Agent, this function does not require an LLM-based agent call. Therefore, it assumes that all items in the order are valid and available in the inventory.
+
+        Args:
+            item_name (str): The name of the item to check.
+            as_of_date (str or datetime): The date to check stock levels against.
+
+        Returns:
+            OrderAgentResponse: Contains the stock level or an error message. None if an error was encountered during the processing.
+        """
+        log("InventoryAgent::process_order", LogLevel.INFO)
+        try:
+
+            res = process_order(order=order)
+            return res
+        except Exception as e:
+            # Handle exceptions that may occur during order processing
+            log(f"Error processing order: {e}", LogLevel.ERROR)
+            return None
+
+    # Not used in this implementation
+    def _get_system_prompt(self) -> str:
+        """
+        Returns the system prompt for the Inventory Agent.
+        This prompt guides the agent's behavior and expectations.
+        """
+
+
+class QuotingAgent:
+    """
+    Quoting Agent responsible for generating quotes based on customer requests and inventory data.
+
+    This agent can apply discount policies and calculate total amounts for quotes.
+    """
+
+    def __init__(self, model_provider: OpenAIProvider):
+        self.agent_id = "quoting_agent"
+        self.agent_name = "Quoting Agent"
+        self.agent = Agent(
+            model=OpenAIModel("gpt-4o", provider=model_provider),
+            output_type=Quote,
+            system_prompt=QuotingAgent.get_system_prompt(),
+            tools=[
+                search_quote_history_tool,
+            ],
+        )
+
+    def generate_quote(self, order: Order, customer_request: str) -> Quote:
+        """
+        Generates a quote for a given order by interacting with the inventory and pricing tools.
+
+        Args:
+            order (Order): The order details for which to generate a quote.
+
+        Returns:
+            Quote: The generated quote containing pricing information, or None if an error occurs.
+        """
+        log(f"{self.agent_name}::generate_quote", LogLevel.INFO)
+
+        # Calculate the total amount for the order
+        order_total = sum([item.unit_price * item.quantity for item in order.items])
+
+        message = (
+            f"Generate a quote for the following order. "
+            f"The order total without any discount is: {order_total}. "
+            f"### Order Details: {order.model_dump_json()}\n"
+            f"### Original Customer Request: {customer_request}."
+        )
+
+        try:
+            response = self.agent.run_sync(message)
+            return response.output
+        except Exception as e:
+            # Handle exceptions that may occur during quote generation
+            log(f"Error generating quote: {e}", LogLevel.ERROR)
+            return None
+
+    @classmethod
+    def get_system_prompt(cls) -> str:
+        return """
+
+            You are a quoting agent working in the sales department of a paper company. Your company prides itself on providing competitive pricing and excellent customer service, and it offers various discount policies to its customers to make them feel valued and appreciated as business partners.
+
+            Your task is to generate a quote based on the order details provided by the customer. You will receive an Order object containing the items and quantities requested. 
+
+            Instructions:
+            1. Search for similar quotes in the database of past quotes to determine the best pricing / discount strategy. Use the original customer request to search for similar quotes.
+            2. Apply any applicable discount policies to the quote.
+            3. Calculate the total amount for the quote, including any discounts applied.
+            4. Ensure that the discount is applied on the individual item level, not on the total amount to make sure that the total amount matches the sum of the individual item prices.
+            5. Generate a customer quote text that summarizes the order and pricing details. Use a positive tone and highlight any discounts applied. You can search for past quotes to determine a suitable format and content for the quote text.
+
+            It is important that the discount are applied correctly to the individual items in the quote to match the total discounted amount shown to the customer.
+
+            Your response should include the following fields:
+            - `order`: An Order object containing the order details.
+            - `quote_items`: A list of QuoteItem objects, each containing:
+                - `item_name`: The name of the item in the quote.
+                - `quantity`: The number of units quoted.
+                - `discounted_price`: The price per unit of the item with discount applied.
+            - `customer_quote`: The quote text provided to the customer.
+            - `total_amount`: The total amount of the quote.
+            - `discounted_amount`: The discounted amount of the quote.
+            - `discount_policy`: An optional DiscountPolicy object containing the discount policy applied to the quote.
+        """
+
+
+class TransactionAgent:
+    """
+    Transaction Agent responsible for managing financial transactions related to orders and inventory.
+
+    This agent can create transactions, retrieve cash balances, and generate financial reports.
+    """
+
+    def __init__(self, model_provider: OpenAIProvider):
+        self.agent_id = "transaction_agent"
+        self.agent_name = "Transaction Agent"
+        # This implementation does not use an LLM-based agent for transaction processing.
+        # self.agent = Agent(
+        #     model=OpenAIModel("gpt-4o", provider=model_provider),
+        #     output_type=TransactionResult,
+        #     system_prompt=self._get_system_prompt(),
+        #     tools=[create_sales_transaction_tool, create_stock_order_transaction_tool],
+        # )
+
+    def process_transactions(
+        self, quote: Quote, stock_order: StockOrder
+    ) -> TransactionResult:
+        """
+        Processes financial transactions related to an order.
+
+        NOTE: Handling transactions for StockOrders and Sales (Quotes) does not require
+        an agent call. Therefore, this method implements the logic directly.
+
+        Args:
+            order (Order): The order details for which to process transactions.
+            stock_order (StockOrder): The stock order details for inventory management.
+
+        Returns:
+            TransactionResult: The result of the transaction processing, including transaction IDs.
+
+        Raises:
+            Exception: If an error occurs during transaction processing, an exception is raised.
+        """
+        log("Agent::process_transactions", LogLevel.INFO)
+        stock_order_transaction_ids = []
+
+        try:
+
+            for stock_item in stock_order.items:
+                id = create_transaction(
+                    item_name=stock_item.item_name,
+                    transaction_type="stock_orders",
+                    quantity=stock_item.quantity,
+                    price=stock_item.unit_price * stock_item.quantity,
+                    date=stock_item.date,
+                )
+                stock_order_transaction_ids.append(id)
+
+        except Exception as e:
+            # Handle exceptions that may occur during transaction creation
+            log(f"Error processing stock order transactions: {e}", LogLevel.ERROR)
+            # TODO: implement compensating action that rolls the transaction
+            # - rollback stock order transactions that were created until the error occurred
+            raise Exception(
+                "An error occurred while processing stock order transactions."
+            )
+
+        log(
+            f"Stock order transactions created: {len(stock_order_transaction_ids)}",
+            LogLevel.INFO,
+        )
+
+        sales_transaction_ids = []
+
+        try:
+
+            for quote_item in quote.quote_items:
+
+                id = create_transaction(
+                    item_name=quote_item.item_name,
+                    transaction_type="sales",
+                    quantity=quote_item.quantity,
+                    price=quote_item.discounted_price * quote_item.quantity,
+                    date=datetime.now(),
+                )
+                sales_transaction_ids.append(id)
+
+        except Exception as e:
+            # Handle exceptions that may occur during transaction creation
+            log(f"Error processing sales transactions: {e}", LogLevel.ERROR)
+            # TODO: implement compensating action that rolls the transaction
+            # - rollback all stock order transactions
+            # - rollback sales transactions that were created until the error occurred
+
+            raise Exception("An error occurred while processing sales transactions.")
+
+        log(f"Sales transactions created: {len(sales_transaction_ids)}", LogLevel.INFO)
+
+        result = TransactionResult(
+            sale_transaction_ids=sales_transaction_ids,
+            stock_order_transaction_ids=stock_order_transaction_ids,
+        )
+        return result
+
+
+class WorkflowError(Enum):
+    ORDER_ERROR = "Failed to extract order details"
+    INVENTORY_ERROR = "Inventory check failed"
+    QUOTING_ERROR = "Quote generation failed"
+    TRANSACTION_ERROR = "Transaction processing failed"
+
+
+class OrchestrationAgent:
+    """
+    Orchestration Agent responsible for managing the flow of operations between other agents.
+
+    This agent coordinates the interactions between Order, Inventory, Quoting, and Transaction agents.
+    """
+
+    def __init__(self, model_provider: OpenAIProvider):
+        self.agent_id = "orchestration_agent"
+        self.agent_name = "Orchestration Agent"
+        self.order_agent = OrderAgent(model_provider=model_provider)
+        self.inventory_agent = InventoryAgent(model_provider=model_provider)
+        self.quoting_agent = QuotingAgent(model_provider=model_provider)
+        self.transaction_agent = TransactionAgent(model_provider=model_provider)
+
+    def process_quote_request(self, request_text: str) -> str:
+        """
+        Represents the main entry point for processing a customer quote request.
+
+        This method implements the orchestration logic to manage the flow between agents,
+        extracting order details, checking inventory, generating quotes, and processing transactions.
+
+        Args:
+            request_text (str): The text of the customer request containing order information.
+
+        Returns:
+            OrderAgentResponse: Contains the extracted order details or an error message.
+        """
+
+        # Step 1: Extract order details using the Order Agent
+        with status("Order Agent - process_quote_request") as s:
+            order_response = self.order_agent.process_quote_request(
+                request_text=request_text
+            )
+            if not order_response.is_success or not order_response.order:
+                s.fail("Order extraction failed")
+                return self._handle_error(WorkflowError.ORDER_ERROR)
+
+            s.fail("Order extraction successful")
+
+        order = order_response.order
+
+        # Step 2: Check inventory using the Inventory Agent
+        stock_order = self.inventory_agent.process_order(order=order)
+        if not stock_order:
+            return self._handle_error(WorkflowError.INVENTORY_ERROR)
+
+        # Step 3: Generate quote using the Quoting Agent
+        quote = self.quoting_agent.generate_quote(
+            order=order, customer_request=request_text
+        )
+        if not quote:
+            return self._handle_error(WorkflowError.QUOTING_ERROR)
+
+        log(f"Quote generated:", LogLevel.DEBUG)
+        log(quote.model_dump_json(indent=2), LogLevel.DEBUG)
+
+        # Step 4: Process payment using the Transaction Agent
+        transaction_response = self.transaction_agent.process_transactions(
+            quote=quote, stock_order=stock_order
+        )
+        if not transaction_response:
+            return self._handle_error(WorkflowError.TRANSACTION_ERROR)
+
+        # return the order response to the caller
+        response = Response(order=order, quote=quote)
+        return str(response)
+
+    def _handle_error(self, error: WorkflowError) -> str:
+        """
+        Handles errors that occur during the orchestration process.
+
+        Args:
+            error (WorkflowError): The error that occurred.
+
+        Returns:
+            OrderAgentResponse: An error response containing the error message.
+        """
+
+        if error == WorkflowError.ORDER_ERROR:
+            log(
+                "[ERROR] Workflow Error: Failed to extract order details.",
+                LogLevel.ERROR,
+            )
+            return "We encountered an issue while extracting order details."
+        else:
+            return f"We encountered a problem while processing your request."
 
 
 """Set up tools for your agents to use, these should be methods that combine the database functions above
  and apply criteria to them to ensure that the flow of the system is correct."""
 
 
+def info_tool_call(func):
+    """
+    Decorator that prints the function name and returns the function with its doc-string.
+    Intended to be used with tool decorators for debugging and documentation.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        log(f"Tool: {func.__name__}", LogLevel.INFO)
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+def tool(func):
+    """
+    Decorator to mark a function as a Pydantic-AI Tool to be used by an agents.
+    """
+    return Tool(info_tool_call(func))
+
+
+@tool
+def get_items_from_inventory() -> List[InventoryItem]:
+    """
+    Retrieves all items from the inventory as of the current date.
+
+    Returns:
+        List[InventoryItem]: A list of InventoryItem objects representing all items in the inventory.
+
+    """
+    # Query the inventory table to get all items
+    inventory_df = pd.read_sql("SELECT * FROM inventory", db_engine)
+
+    # Convert DataFrame rows to InventoryItem objects
+    items = [
+        InventoryItem(
+            item_name=row["item_name"],
+            category=row["category"],
+            unit_price=row["unit_price"],
+        )
+        for _, row in inventory_df.iterrows()
+    ]
+
+    return items
+
+
+@tool
+def get_order_id_tool(request_text: str) -> str:
+    """
+    Extracts the order ID from a customer request text.
+
+    Args:
+        request_text (str): The text of the customer request containing order information.
+
+    Returns:
+        str: The extracted order ID.
+    """
+
+    # For now, we assume that each call generates a new order ID.
+    return uuid.uuid4().hex
+
+
 # Tools for inventory agent
+def process_order(order: Order) -> StockOrder:
+    """
+    Processes an order by checking stock levels and returning a stock order if necessary.
+
+    Args:
+        order (Order): The order details to process.
+
+    Returns:
+        StockOrder: A StockOrder object containing the item name, quantity, and expected delivery date.
+    """
+    # loop through all order items and check the stock level
+    stock_orders = []
+    for item in order.items:
+        # query stock level
+        stock_level = get_stock_level(item.item_name, datetime.now())
+
+        # check if item was found in the inventory
+        if stock_level.empty:
+            log(f"Item {item.item_name} not found in inventory.", LogLevel.ERROR)
+            # Error Strategy: be opportunistic and skip the unknown item. This can be improve at a later stage.
+            # A better strategy would be to direct the request to a human agent or to log the error for further investigation.
+            continue
+
+        if stock_level["current_stock"].iloc[0] < item.quantity:
+            # If stock is below the required quantity, create a stock order
+            expected_delivery_date = get_supplier_delivery_date(
+                datetime.now().isoformat(), item.quantity
+            )
+            stock_orders.append(
+                StockOrderItem(
+                    item_name=item.item_name,
+                    quantity=item.quantity,
+                    expected_delivery_date=expected_delivery_date,
+                )
+            )
+
+    # return a stock order with empty items if no stock orders were created
+    return StockOrder(items=stock_orders)
 
 
-# Tools for quoting agent
+@tool
+def process_order_tool(order: Order) -> StockOrder:
+    """
+    Processes an order by checking stock levels and returning a stock order if necessary.
+
+    Args:
+        order (Order): The order details to process.
+
+    Returns:
+        StockOrder: A StockOrder object containing the item name, quantity, and expected delivery date.
+    """
+    # Call the process_order function to check stock levels and create stock orders
+    return process_order(order=order)
 
 
-# Tools for ordering agent
+def calculate_order_total(order: Order) -> float:
+    """
+    Calculates the total amount for a given order.
+
+    Args:
+        order (Order): The order details for which to calculate the total amount.
+
+    Returns:
+        float: The total amount for the order.
+    """
+    total_amount = sum(item.unit_price * item.quantity for item in order.items)
+    return total_amount
+
+
+@tool
+def calculate_order_total_tool(order: Order) -> float:
+    """
+    Calculates the total amount for a given order.
+
+    Args:
+        order (Order): The order details for which to calculate the total amount.
+        customer_request (str): The original customer request for context.
+
+    Returns:
+        float: The total amount for the order.
+    """
+    # Call the calculate_order_total function to compute the total amount
+    return calculate_order_total(order=order)
+
+
+# @QuotingAgent.tool
+@tool
+def search_quote_history_tool(order: Order, customer_request: str) -> DiscountPolicy:
+    """
+    Retrieves the discount policy applicable to a given order.
+
+    Args:
+        order (Order): The order details for which to retrieve the discount policy.
+
+    Returns:
+        List[Dict]: A list of matching quotes, each represented as a dictionary with fields:
+            - original_request
+            - total_amount
+            - quote_explanation
+            - job_type
+            - order_size
+            - event_type
+            - order_date
+    """
+    log("Searching Quote History", LogLevel.DEBUG)
+    log(f"Original Customer Request: {customer_request}", LogLevel.DEBUG)
+
+    # run a search for quotes that match the order items
+    # search_results = search_quote_history(
+    #     search_terms=[item.item_name for item in order.items], limit=5
+    # )
+    search_results = search_quote_history(search_terms=[customer_request], limit=5)
+
+    log(f"Search results for quote history found: {len(search_results)}", LogLevel.INFO)
+    for result in search_results:
+        log(
+            f"- {result['original_request']} \n- {result['quote_explanation']}",
+            LogLevel.DEBUG,
+        )
+    return search_results
 
 
 # Set up your agents and create an orchestration agent that will manage them.
@@ -610,10 +1567,16 @@ def search_quote_history(search_terms: List[str], limit: int = 5) -> List[Dict]:
 
 # Run your test scenarios by writing them here. Make sure to keep track of them.
 
+
+# load environment
+dotenv.load_dotenv()
+UDACITY_OPENAI_API_KEY = os.getenv("UDACITY_OPENAI_API_KEY")
+
+
 def run_test_scenarios():
-    
-    print("Initializing Database...")
-    init_database()
+
+    log("Initializing Database...", LogLevel.INFO)
+    init_database(db_engine=db_engine)
     try:
         quote_requests_sample = pd.read_csv("quote_requests_sample.csv")
         quote_requests_sample["request_date"] = pd.to_datetime(
@@ -622,7 +1585,7 @@ def run_test_scenarios():
         quote_requests_sample.dropna(subset=["request_date"], inplace=True)
         quote_requests_sample = quote_requests_sample.sort_values("request_date")
     except Exception as e:
-        print(f"FATAL: Error loading test data: {e}")
+        log(f"FATAL: Error loading test data: {e}", LogLevel.ERROR)
         return
 
     quote_requests_sample = pd.read_csv("quote_requests_sample.csv")
@@ -646,6 +1609,12 @@ def run_test_scenarios():
     ############
     ############
     ############
+    # Set up OpenAI provider with the API key
+    openai_provider = OpenAIProvider(
+        base_url="https://openai.vocareum.com/v1", api_key=UDACITY_OPENAI_API_KEY
+    )
+
+    orchestration_agent = OrchestrationAgent(model_provider=openai_provider)
 
     results = []
     for idx, row in quote_requests_sample.iterrows():
@@ -667,8 +1636,7 @@ def run_test_scenarios():
         ############
         ############
         ############
-
-        # response = call_your_multi_agent_system(request_with_date)
+        response = orchestration_agent.process_quote_request(request_with_date)
 
         # Update state
         report = generate_financial_report(request_date)
@@ -690,6 +1658,9 @@ def run_test_scenarios():
         )
 
         time.sleep(1)
+
+        # TODO REMOVE this after testing
+        break
 
     # Final report
     final_date = quote_requests_sample["request_date"].max().strftime("%Y-%m-%d")

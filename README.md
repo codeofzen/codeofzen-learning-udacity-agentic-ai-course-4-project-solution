@@ -6,9 +6,9 @@ Welcome to the starter code repository for the **Munder Difflin Paper Company Mu
 
 You’ve been hired as an AI consultant by Munder Difflin Paper Company, a fictional enterprise looking to modernize their workflows. They need a smart, modular **multi-agent system** to automate:
 
-- **Inventory checks** and restocking decisions
-- **Quote generation** for incoming sales inquiries
-- **Order fulfillment** including supplier logistics and transactions
+-   **Inventory checks** and restocking decisions
+-   **Quote generation** for incoming sales inquiries
+-   **Order fulfillment** including supplier logistics and transactions
 
 Your solution must use a maximum of **5 agents** and process inputs and outputs entirely via **text-based communication**.
 
@@ -20,10 +20,10 @@ This project challenges your ability to orchestrate agents using modern Python f
 
 From the `project.zip` starter archive, you will find:
 
-- `project_starter.py`: The main Python script you will modify to implement your agent system
-- `quotes.csv`: Historical quote data used for reference by quoting agents
-- `quote_requests.csv`: Incoming customer requests used to build quoting logic
-- `quote_requests_sample.csv`: A set of simulated test cases to evaluate your system
+-   `project_starter.py`: The main Python script you will modify to implement your agent system
+-   `quotes.csv`: Historical quote data used for reference by quoting agents
+-   `quote_requests.csv`: Incoming customer requests used to build quoting logic
+-   `quote_requests_sample.csv`: A set of simulated test cases to evaluate your system
 
 ---
 
@@ -65,20 +65,20 @@ Start by defining your agents in the `"YOUR MULTI AGENT STARTS HERE"` section in
 
 Output will include:
 
-- Agent responses
-- Cash and inventory updates
-- Final financial report
-- A `test_results.csv` file with all interaction logs
+-   Agent responses
+-   Cash and inventory updates
+-   Final financial report
+-   A `test_results.csv` file with all interaction logs
 
 ---
 
 ## Tips for Success
 
-- Start by sketching a **flow diagram** to visualize agent responsibilities and interactions.
-- Test individual agent tools before full orchestration.
-- Always include **dates** in customer requests when passing data between agents.
-- Ensure every quote includes **bulk discounts** and uses past data when available.
-- Use the **exact item names** from the database to avoid transaction failures.
+-   Start by sketching a **flow diagram** to visualize agent responsibilities and interactions.
+-   Test individual agent tools before full orchestration.
+-   Always include **dates** in customer requests when passing data between agents.
+-   Ensure every quote includes **bulk discounts** and uses past data when available.
+-   Use the **exact item names** from the database to avoid transaction failures.
 
 ---
 
