@@ -2341,5 +2341,5 @@ def run_test_scenario_by_index(idx: int):
 
 
 if __name__ == "__main__":
-    results = run_test_scenarios()
-    # results = run_test_scenario_by_index(19)  # Run a specific test scenario by index
+    # results = run_test_scenarios()
+    results = run_test_scenario_by_index(0)  # Run a specific test scenario by index
