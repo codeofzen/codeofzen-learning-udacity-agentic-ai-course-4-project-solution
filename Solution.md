@@ -159,9 +159,13 @@ A more mature system would likely provide a more restricted mapping to ensure th
 
 ## Final Thoughts
 
+### LLM-Based vs. Logic-Based Agent Implementations
+
 This project assignment was really insightful and triggered a lot of questions about how to build reliable and scalable solutions for real-world use cases. It also helped me to refine my view of how to design and implement agentic systems. With more then 20 year of experience in software design, I might have to "unlearn" some of my best practices for solving problems with agents.
 
 One key consideration is to decide when to use an LLM-based agent versus coding the behavior directly (in Python). In some cases (Order processing, Quoting), the benefits of an LLM are clear given the ability of the LLM to process unstructured data and reason. In other cases (e.g. Inventory and transaction processing), using traditional development is a good choice if the interface is clear and the data is well structured. While the results of the LLM-based Inventory Agent are impressive, it benefited greatly from my experience that I gained during implementing the logic myself. Still, I will investigate deeper into the LLM-based approach since this has shown very successful.
+
+### Production Readiness
 
 The current implementation of the system is definitely not ready for production since it misses critical functionality and would not meet the standards of business experts in the paper industry:
 
@@ -170,3 +174,5 @@ The current implementation of the system is definitely not ready for production 
 -   Error Handling: As noted above, a production-ready solution would need to have robust error handling (transactions or compensating actions) and a clear escalation process to human-experts (e.g. sales backoffice team)
 
 In general, while agents are definitely a very powerful tool, especially if they are using LLMs to implement complex steps in the process, getting them production-ready is challenging and require proper planning.
+
+I need to apologize for the lengthy code. This is obviously a learning projects so that are several switches and helpers for debugging and testing the system. I left them in the code to be able to re-run the project and continue on the optional objectives.
