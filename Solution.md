@@ -81,9 +81,12 @@ Searching for historic quotes uses the products from the current order. This is 
 
 The Inventory Agent encapsulates the fulfillment of orders and the necessary inventory management. The result is a Stock Order, which contains individual stock order items that need to be purchased to complete the order.
 
-This Agent does not use an LLM since the code for creating the Stock Order is deterministic. Mapping the products is already done by the Order Agent and the Inventory Agent therefore already receives a list of products that are matched by the inventory.
+This agent can be run in two different modes:
 
-We assume that the deliver from the inventory to the customer will take 2 days. Therefore, the expected delivery data for the re-orders in -2 days relative to the customer order date.
+-   `InventoryAgent.process_order_direct`: This implements the core logic for managing the inventory (i.e. creating stock orders) in Python code. The logic is quite straightforward but helped to formulate the rules for how the inventory is managed and how to handle exceptional conditions.
+-   `InventoryAgent.process_order_llm`: This method uses an LLM with function calling to process the order according to the rules. Two separate versions of the system prompt have been created. The first one defines the process steps in the prompt. The second one uses the ReAct pattern and requests the LLM to come up with a plan that achieves the stated goal.
+
+The LLM version proofed to be surprisingly effective, with a powerful model like `gpt-4o`. Given that the direct-implementation was done prior, the prompt benefited from the deeper understanding of the necessary logic. For a smaller model like `gpt-4o-mini` several problems have been spotted but these have not been investigated in more detail for now.
 
 ##### Interfaces
 
@@ -102,6 +105,22 @@ This agent does not use an LLM since all the data is provided by typed data obje
 -   Input Schema: Transaction
 -   Output Schema: TransactionResult
 -   Tools: none
+
+## 3 Testing
+
+The workflow has been tested several times with different configurations:
+
+1. Model Type: gpt-4o, gpt-4o-mini
+2. Direct or LLM-based implementation of Inventory Management
+
+Two result files have been created to capture the complete processing output for the sample quote requests as specified in the project rubric\_
+
+-   [`test_results_direct.csv`](./test_results_direct.csv): using the direct implementation (Python) for the Inventory Agent.
+-   [`test_results_direct.csv`](./test_results_llm.csv): Using the LLM-based implementation of the Inventory Agent.
+
+Both tests have been run with `gpt-4o` as the model for all individual agents. A test has been done with `gpt-4o-mini`, but this showed several problems in terms of the result quality and reliability.
+
+While `gpt-4o` is able to extract the order details from the customer quote request very reliably, ``gpt-4o-mini` fails for a substantial percentage of cases (> 25%), while not really bringing big improvements to latency.
 
 ## 3. Improvements & Opportunities
 
@@ -140,9 +159,9 @@ A more mature system would likely provide a more restricted mapping to ensure th
 
 ## Final Thoughts
 
-This project assignment was really insightful and triggered a lot of questions about how to build reliable and scalable solutions for real-world use cases.
+This project assignment was really insightful and triggered a lot of questions about how to build reliable and scalable solutions for real-world use cases. It also helped me to refine my view of how to design and implement agentic systems. With more then 20 year of experience in software design, I might have to "unlearn" some of my best practices for solving problems with agents.
 
-One key consideration is to decide when to use an LLM-based agent versus coding the behavior directly (in Python). In some cases (Order processing, Quoting), the benefits of an LLM are clear given the ability of the LLM to process unstructured data and reason. In other cases (e.g. Inventory and transaction processing), using traditional development is a good choice if the interface is clear and the data is well structured.
+One key consideration is to decide when to use an LLM-based agent versus coding the behavior directly (in Python). In some cases (Order processing, Quoting), the benefits of an LLM are clear given the ability of the LLM to process unstructured data and reason. In other cases (e.g. Inventory and transaction processing), using traditional development is a good choice if the interface is clear and the data is well structured. While the results of the LLM-based Inventory Agent are impressive, it benefited greatly from my experience that I gained during implementing the logic myself. Still, I will investigate deeper into the LLM-based approach since this has shown very successful.
 
 The current implementation of the system is definitely not ready for production since it misses critical functionality and would not meet the standards of business experts in the paper industry:
 
