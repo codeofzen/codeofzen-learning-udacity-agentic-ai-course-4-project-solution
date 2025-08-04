@@ -108,6 +108,8 @@ This agent does not use an LLM since all the data is provided by typed data obje
 
 ## 3 Testing
 
+### Test Setup & Documentation
+
 The workflow has been tested several times with different configurations:
 
 1. Model Type: gpt-4o, gpt-4o-mini
@@ -118,9 +120,21 @@ Two result files have been created to capture the complete processing output for
 -   [`test_results_direct.csv`](./test_results_direct.csv): using the direct implementation (Python) for the Inventory Agent.
 -   [`test_results_direct.csv`](./test_results_llm.csv): Using the LLM-based implementation of the Inventory Agent.
 
+The test file both contain the necessary information to pass the criteria of the assignment:
+
+-   At least three requests result in a change to the cash balance.
+-   At least three quote requests are successfully fulfilled.
+-   Not all requests from quote_requests_sample.csv are fulfilled, with reasons provided or implied for unfulfilled requests (e.g., insufficient stock).
+
+Errors during processing are marked with the prefix in the quote comment: `Ordering Error:`.
+
+#### Test Reflections
+
 Both tests have been run with `gpt-4o` as the model for all individual agents. A test has been done with `gpt-4o-mini`, but this showed several problems in terms of the result quality and reliability.
 
 While `gpt-4o` is able to extract the order details from the customer quote request very reliably, ``gpt-4o-mini` fails for a substantial percentage of cases (> 25%), while not really bringing big improvements to latency.
+
+The
 
 ## 3. Improvements & Opportunities
 
