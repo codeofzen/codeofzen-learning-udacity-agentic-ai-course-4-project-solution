@@ -136,7 +136,7 @@ While `gpt-4o` is able to extract the order details from the customer quote requ
 
 The
 
-## 3. Improvements & Opportunities
+## 4. Improvements & Opportunities
 
 ### Parallelization
 
@@ -156,7 +156,7 @@ While this is a very elegant way, it will eventually lead to performance problem
 
 This is not directly related to the agentic architecture but rather to the general architecture of event driven systems.
 
-## 4. Assumptions & Notes
+## 5. Assumptions & Notes
 
 ### Paper Industry-Specific Quantity Definitions
 
