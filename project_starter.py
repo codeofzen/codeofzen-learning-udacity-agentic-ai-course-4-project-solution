@@ -238,7 +238,7 @@ def init_database(db_engine: Engine, seed: int = 137) -> Engine:
         # 4. Generate inventory and seed stock
         # ----------------------------
         inventory_df = generate_sample_inventory(
-            paper_supplies, seed=seed, coverage=0.4
+            paper_supplies, seed=seed, coverage=0.8
         )
 
         # Seed initial transactions
@@ -1005,7 +1005,7 @@ class OrderAgent:
         self.agent_id = "order_agent"
         self.agent_name = "Order Agent"
         self.agent = Agent(
-            model=OpenAIModel("gpt-4o", provider=model_provider),
+            model=OpenAIModel(OPENAI_DEFAULT_MODEL, provider=model_provider),
             output_type=OrderResult,
             system_prompt=self._get_system_prompt(),
             tools=[get_order_id_tool, get_all_inventory_items],
@@ -1172,9 +1172,10 @@ class InventoryAgent:
         self.agent_id = "inventory_agent"
         self.agent_name = "Inventory Agent"
         self.agent = Agent(
-            model=OpenAIModel("gpt-4o", provider=model_provider),
-            output_type=StockOrder,
+            model=OpenAIModel(OPENAI_DEFAULT_MODEL, provider=model_provider),
+            output_type=InventoryResult,
             system_prompt=InventoryAgent._get_system_prompt(),
+            # system_prompt=InventoryAgent._get_system_prompt_react(),
             tools=[
                 get_cash_balance_tool,
                 get_supplier_delivery_date_tool,
@@ -1185,7 +1186,20 @@ class InventoryAgent:
 
     # AI-based solution: requires an LLM-based agent call to process the order with the associated tools
     def process_order_llm(self, order: Order) -> InventoryResult:
-        pass
+        agent_error_message = "Unknown Inventory Agent Error"
+        try:
+            user_message = order.model_dump_json(indent=2)
+            agent_result = self.agent.run_sync(user_message)
+            return agent_result.output
+
+        except Exception as e:
+            log(f"Error processing order with LLM: {e}", LogLevel.ERROR)
+            agent_error_message = f"Error processing order with LLM: {str(e)}"
+            return InventoryResult(
+                is_success=False,
+                stock_order=None,
+                agent_error=agent_error_message,
+            )
 
     # Imperative solution: does not require an LLM-based agent call
     def process_order_direct(self, order: Order) -> InventoryResult:
@@ -1448,6 +1462,7 @@ You must process each order by:
 3. Validating cash balance for any required stock orders
 4. Ensuring delivery timelines can be met
 5. Returning appropriate stock orders or error messages
+6. If no restocking is needed, return set the `items` field of the `StockOrder` to an empty list.
 
 ## Processing Logic
 
@@ -1619,7 +1634,7 @@ class QuotingAgent:
         self.agent_id = "quoting_agent"
         self.agent_name = "Quoting Agent"
         self.agent = Agent(
-            model=OpenAIModel("gpt-4o", provider=model_provider),
+            model=OpenAIModel(OPENAI_DEFAULT_MODEL, provider=model_provider),
             output_type=Quote,
             system_prompt=QuotingAgent.get_system_prompt(),
             tools=[
@@ -2064,30 +2079,27 @@ def search_quote_history_tool(order: Order, customer_request: str) -> DiscountPo
             LogLevel.INFO,
         )
 
-    log(
-        f"Search results for quote history found: {len(search_results)}", LogLevel.DEBUG
-    )
-    for result in search_results:
-        log(
-            f"- {result['original_request']} \n- {result['quote_explanation']}",
-            LogLevel.DEBUG,
-        )
+    # for result in search_results:
+    #     log(
+    #         f"- {result['original_request']} \n- {result['quote_explanation']}",
+    #         LogLevel.DEBUG,
+    #     )
     return search_results
 
 
 @tool
-def get_cash_balance_tool(date: str) -> float:
+def get_cash_balance_tool(as_of_date: str) -> float:
     """
     Retrieves the cash balance as of a specific date.
 
     Args:
-        date (str): The date in ISO format (YYYY-MM-DD) for which to retrieve the cash balance.
+        as_of_date (str): The date in ISO format (YYYY-MM-DD) for which to retrieve the cash balance.
 
     Returns:
         float: The cash balance as of the specified date.
     """
     # Call the get_cash_balance function to retrieve the cash balance
-    return get_cash_balance(date=date)
+    return get_cash_balance(as_of_date=as_of_date)
 
 
 @tool
@@ -2103,7 +2115,7 @@ def get_supplier_delivery_date_tool(order_date: str, quantity: int) -> str:
         str: The expected delivery date in ISO format (YYYY-MM-DD).
     """
     # Call the get_supplier_delivery_date function to retrieve the delivery date
-    return get_supplier_delivery_date(order_date=order_date, quantity=quantity)
+    return get_supplier_delivery_date(input_date_str=order_date, quantity=quantity)
 
 
 @tool
@@ -2134,7 +2146,7 @@ def get_stock_level_tool(item_name: str, as_of_date: str) -> pd.DataFrame:
         pd.DataFrame: A DataFrame containing the stock level data for the specified item.
     """
     # Call the get_stock_level function to retrieve the stock level
-    return get_stock_level(item_name=item_name, as_of_date=as_of_date)
+    return get_stock_level(item_name=item_name, as_of_date=as_of_date).to_json()
 
 
 # Set up your agents and create an orchestration agent that will manage them.
@@ -2147,7 +2159,8 @@ def get_stock_level_tool(item_name: str, as_of_date: str) -> pd.DataFrame:
 dotenv.load_dotenv()
 UDACITY_OPENAI_API_KEY = os.getenv("UDACITY_OPENAI_API_KEY")
 
-log_level = LogLevel.WARNING
+OPENAI_DEFAULT_MODEL = "gpt-4o"
+# OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 
 
 def run_test_scenarios():
@@ -2194,8 +2207,8 @@ def run_test_scenarios():
     orchestration_agent = OrchestrationAgent(model_provider=openai_provider)
 
     # define how many sample to process: defaults to all
-    # sample_limit = 5  # Set to a smaller number for testing purposes
     sample_limit = len(quote_requests_sample)
+    # sample_limit = 5  # Set to a smaller number for testing purposes
 
     results = []
     for idx, row in quote_requests_sample.iterrows():
@@ -2340,6 +2353,9 @@ def run_test_scenario_by_index(idx: int):
     return results
 
 
+log_level = LogLevel.WARNING
+
+
 if __name__ == "__main__":
-    # results = run_test_scenarios()
-    results = run_test_scenario_by_index(0)  # Run a specific test scenario by index
+    results = run_test_scenarios()
+    # results = run_test_scenario_by_index(0)  # Run a specific test scenario by index
